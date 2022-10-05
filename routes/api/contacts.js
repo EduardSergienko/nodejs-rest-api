@@ -1,9 +1,13 @@
 const express = require("express");
 const { isValidObjectId } = require("mongoose");
 const { NotFound, BadRequest } = require("http-errors");
-const router = express.Router();
 const Joi = require("joi");
+const jwt = require("jsonwebtoken");
+
 const Contact = require("../../models/contact");
+const auth = require("../../middlewares/auth");
+const { SECRET_KEY } = process.env;
+const router = express.Router();
 const addSchema = Joi.object({
 	name: Joi.string().min(5).max(40).required(),
 	email: Joi.string().required(),
@@ -14,9 +18,19 @@ const updateFavoriteSchema = Joi.object({
 	favorite: Joi.boolean().required(),
 });
 
-router.get("/", async (_, res, next) => {
+router.get("/", auth, async (req, res, next) => {
 	try {
-		const contactList = await Contact.find();
+		const { _id } = req.user;
+		const { page = 1, limit = 10, favorite } = req.query;
+		const skip = (page - 1) * 10;
+		const contactList = await Contact.find(
+			favorite ? { owner: _id, favorite } : { owner: _id },
+			"",
+			{
+				skip,
+				limit: +limit,
+			}
+		).populate("owner", "_id, email");
 		res.json({
 			status: "succsess",
 			code: 200,
@@ -29,8 +43,11 @@ router.get("/", async (_, res, next) => {
 	}
 });
 
-router.get("/:contactId", async (req, res, next) => {
+router.get("/:contactId", auth, async (req, res, next) => {
 	try {
+		const { authorization = "" } = req.headers;
+		const [token] = authorization.split(" ").slice(1);
+		const { id } = jwt.verify(token, SECRET_KEY);
 		const { contactId } = req.params;
 		const isValideId = isValidObjectId(contactId);
 		if (!isValideId) {
@@ -39,6 +56,11 @@ router.get("/:contactId", async (req, res, next) => {
 		const contact = await Contact.findById({ _id: contactId });
 		if (!contact) {
 			throw new NotFound(`Contact with Id=${contactId} not found`);
+		}
+		if (id !== contact.owner._id) {
+			throw new NotFound(
+				`Contact with Id=${contactId} not found in your collection`
+			);
 		}
 		res.json({
 			status: "succsess",
@@ -52,28 +74,33 @@ router.get("/:contactId", async (req, res, next) => {
 	}
 });
 
-router.post("/", async (req, res, next) => {
+router.post("/", auth, async (req, res, next) => {
 	try {
 		const { error } = addSchema.validate(req.body);
 		if (error) {
 			throw new BadRequest(error.message);
 		}
-		const newContact = await Contact.create(req.body);
+		const { _id } = req.user;
+		const newContact = await Contact.create({ ...req.body, owner: _id });
 		res.status(201).json(newContact);
 	} catch (error) {
 		next(error);
 	}
 });
 
-router.delete("/:contactId", async (req, res, next) => {
+router.delete("/:contactId", auth, async (req, res, next) => {
 	try {
+		const { _id } = req.user;
 		const { contactId } = req.params;
 		const isValideId = isValidObjectId(contactId);
 		if (!isValideId) {
 			throw new BadRequest(`Id - ${contactId} is not valid`);
 		}
-		const contact = await Contact.findByIdAndRemove(contactId);
-		console.log(contact);
+		const contact = await Contact.findOneAndDelete({
+			contactId,
+			owner: _id,
+		});
+
 		if (!contact) {
 			throw new NotFound(`Contact with Id=${contactId} not found`);
 		}
@@ -90,19 +117,23 @@ router.delete("/:contactId", async (req, res, next) => {
 	}
 });
 
-router.put("/:contactId", async (req, res, next) => {
+router.put("/:contactId", auth, async (req, res, next) => {
 	try {
 		const { error } = addSchema.validate(req.body);
 		if (error) {
 			throw new BadRequest(error.message);
 		}
+		const { _id } = req.user;
 		const { contactId } = req.params;
 		const isValideId = isValidObjectId(contactId);
 		if (!isValideId) {
 			throw new BadRequest(`Id - ${contactId} is not valid`);
 		}
-		const updatedContact = await Contact.findByIdAndUpdate(
-			contactId,
+		const updatedContact = await Contact.findOneAndUpdate(
+			{
+				contactId,
+				owner: _id,
+			},
 			req.body,
 			{ new: true }
 		);
@@ -115,19 +146,23 @@ router.put("/:contactId", async (req, res, next) => {
 	}
 });
 
-router.patch("/:contactId/favorite", async (req, res, next) => {
+router.patch("/:contactId/favorite", auth, async (req, res, next) => {
 	try {
 		const { error } = updateFavoriteSchema.validate(req.body);
 		if (error) {
 			throw new BadRequest(error.message);
 		}
+		const { _id } = req.user;
 		const { contactId } = req.params;
 		const isValideId = isValidObjectId(contactId);
 		if (!isValideId) {
 			throw new BadRequest(`Id - ${contactId} is not valid`);
 		}
-		const updatedContact = await Contact.findByIdAndUpdate(
-			contactId,
+		const updatedContact = await Contact.findOneAndUpdate(
+			{
+				contactId,
+				owner: _id,
+			},
 			req.body,
 			{ new: true }
 		);
