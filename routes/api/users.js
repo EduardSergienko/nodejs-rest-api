@@ -1,12 +1,17 @@
 const express = require("express");
+const path = require("path");
+const fs = require("fs/promises");
 const { BadRequest, Conflict, Unauthorized } = require("http-errors");
 const Joi = require("joi");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const gravatar = require("gravatar");
 
+const avatarResizing = require("../../helpers/avatarResizing");
 const { SECRET_KEY } = process.env;
 const User = require("../../models/user");
 const auth = require("../../middlewares/auth");
+const upload = require("../../middlewares/upload");
 
 const router = express.Router();
 const userSchema = Joi.object({
@@ -26,8 +31,13 @@ router.post("/signup", async (req, res, next) => {
 			throw new Conflict("Email in use");
 		}
 		const hashPassword = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
-
-		await User.create({ email, password: hashPassword, subscription });
+		const avatarURL = gravatar.url(email);
+		await User.create({
+			email,
+			password: hashPassword,
+			subscription,
+			avatarURL,
+		});
 		res.status(201).json({
 			status: "succsess",
 			code: 201,
@@ -35,6 +45,7 @@ router.post("/signup", async (req, res, next) => {
 				user: {
 					email,
 					subscription,
+					avatarURL,
 				},
 			},
 		});
@@ -97,5 +108,30 @@ router.get("/current", auth, async (req, res, next) => {
 		},
 	});
 });
+
+router.patch(
+	"/avatars",
+	auth,
+	upload.single("avatar"),
+	async (req, res, next) => {
+		const { _id } = req.user;
+		const { path: tempUpload, originalname } = req.file;
+		const avatarsDir = path.join(__dirname, "../../", "public", "avatars");
+		const imgName = `${_id}_${originalname}`;
+
+		try {
+			const resultUpload = path.join(avatarsDir, imgName);
+			await fs.rename(tempUpload, resultUpload);
+
+			const avatarURL = path.join("public", "avatars", imgName);
+			avatarResizing(avatarURL);
+			await User.findByIdAndUpdate(_id, { avatarURL });
+			res.json(avatarURL);
+		} catch (error) {
+			await fs.unlink(tempUpload);
+			next(error);
+		}
+	}
+);
 
 module.exports = router;
